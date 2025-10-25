@@ -41,6 +41,23 @@ optimizer = Adam(model.parameters(), lr=5e-6)
 
 # logger.level("INFO")
 
+
+def validate():
+    avg_loss = 0
+    batches = 0
+    for seq, masked_tgt in val_dataloader:
+        seq = seq.to(device)
+        logits = model(seq)
+        logits = logits.reshape([-1, logits.shape[-1]])
+        masked_tgt = masked_tgt.reshape([-1])
+        masked_tgt = masked_tgt.to(device)
+        loss = criterion(logits, masked_tgt)
+        avg_loss += loss
+        batches += 1
+    logger.info(f"VALIDATE = {avg_loss/batches}")
+
+
+step = 0
 for epoch in range(3):
     for seq, masked_tgt in train_dataloader:
         optimizer.zero_grad()
@@ -58,7 +75,10 @@ for epoch in range(3):
         logger.debug(masked_tgt.shape)
         logger.debug(logits)
         logger.debug(masked_tgt)
-        loss = criterion(logits, masked_tgt)
+        loss = criterion(logits, masked_tgt)        
         logger.info(loss)
         loss.backward()
         optimizer.step()
+        step += 1
+        if step % 20 == 0:
+            validate()
