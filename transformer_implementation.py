@@ -133,16 +133,17 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self):
+    def __init__(self, vocab_size):
         super().__init__()
-        self.dim = 256  # hence forth referred to as `d`
+        self.dim = 512  # hence forth referred to as `d`
         self.nheads = 8
-        self.vocab_size = 10000
+        self.vocab_size = vocab_size
         self.word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
-        self.nlayers = 1
+        self.nlayers = 8
         self.transformer_blocks = nn.ModuleList(
             [TransformerBlock(dim=self.dim, nheads=self.nheads) for i in range(self.nlayers)]
         )
+        assert self.word_embeddings.padding_idx == 0
 
     # x: [batch_size (B), num_tokens (N)]
     def forward(self, x):
@@ -157,13 +158,19 @@ class Transformer(nn.Module):
             x = self.transformer_blocks[i](x, mask)
 
         logits = x @ self.word_embeddings.weight.transpose(0, 1)
+        # print(logits.shape)
 
         return logits
 
 
-transformer = Transformer()
+# class TransformerSFT(Transformer):
+#     def forward(self, x, tgt_mask):
+
+
+
+# transformer = Transformer()
 
 # x = torch.randint(high = 10000, size = (2, 50))
-x = torch.tensor([[1, 2, 3, 4, 0, 0], [5, 6, 0, 0, 0, 0]])
+# x = torch.tensor([[1, 2, 3, 4, 0, 0], [5, 6, 0, 0, 0, 0]])
 
-y = transformer(x)
+# y = transformer(x)
