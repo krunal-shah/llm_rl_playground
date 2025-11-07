@@ -10,6 +10,7 @@ Original file is located at
 import torch
 import torch.nn as nn
 import math
+from loguru import logger
 
 """
 Gotchas:
@@ -133,13 +134,17 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, vocab_size):
+    def __init__(self, vocab_size, max_length):
         super().__init__()
-        self.dim = 512  # hence forth referred to as `d`
-        self.nheads = 8
+        self.dim = 256  # hence forth referred to as `d`
+        self.nheads = 4
+        self.max_length = max_length
         self.vocab_size = vocab_size
         self.word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
-        self.nlayers = 8
+        self.inverse_word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
+        self.position_embeddings = nn.Parameter(torch.empty(self.max_length, self.dim))
+        # self.position_embeddings.data.normal_(mean=0.0, std=1.0)
+        self.nlayers = 4
         self.transformer_blocks = nn.ModuleList(
             [TransformerBlock(dim=self.dim, nheads=self.nheads) for i in range(self.nlayers)]
         )
@@ -151,13 +156,14 @@ class Transformer(nn.Module):
         indices = x.view([-1])
         mask = torch.where(indices != self.word_embeddings.padding_idx, torch.ones_like(indices), float(0))
 
-        x = self.word_embeddings(x)
+        x = self.word_embeddings(x) + self.position_embeddings
         mask = mask.view([B, N, 1])
 
         for i in range(self.nlayers):
             x = self.transformer_blocks[i](x, mask)
 
-        logits = x @ self.word_embeddings.weight.transpose(0, 1)
+        # logits = x @ self.inverse_word_embeddings.weight.transpose(0, 1)
+        logits = x @ self.inverse_word_embeddings.weight.transpose(0, 1)
         # print(logits.shape)
 
         return logits
