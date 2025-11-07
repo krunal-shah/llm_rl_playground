@@ -10,6 +10,21 @@ from transformer_implementation import Transformer
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 
+"""
+Gotchas:
+
+Optimization:
+  - much higher LR needed when training from scratch
+  - higher batch size! (worked wonders)
+  - was on the right track with schedule
+  - gradient clipping (optional, sometimes works better without)
+
+Dataset size:
+  - Had overestimated the learnability of transformers and their sample efficiency
+"""
+
+torch.manual_seed(0)
+
 logger.remove()
 logger.add(
     sys.stderr,
@@ -24,10 +39,10 @@ logger.add(
 
 full_dataset = AdditionDataset()
 generator = torch.Generator().manual_seed(42)
-train_dataset, val_dataset, test_dataset = random_split(full_dataset, [0.8, 0.1, 0.1], generator=generator)
+train_dataset, val_dataset, test_dataset = random_split(full_dataset, [0.95, 0.025, 0.025], generator=generator)
 max_length = full_dataset.max_length
 
-train_dataloader = DataLoader(train_dataset, batch_size=16)
+train_dataloader = DataLoader(train_dataset, batch_size=64)
 val_dataloader = DataLoader(val_dataset)
 test_dataloader = DataLoader(test_dataset)
 
@@ -42,11 +57,11 @@ writer = SummaryWriter()
 model = Transformer(vocab_size=full_dataset.vocab_size(), max_length=max_length)
 model = model.to(device)
 criterion = CrossEntropyLoss(ignore_index=full_dataset.pad_idx)
-optimizer = Adam(model.parameters(), lr=1e-5)
+optimizer = Adam(model.parameters(), lr=5e-4)
 
-# scheduler1 = LinearLR(optimizer, start_factor=0.05, total_iters=50)
-# scheduler2 = CosineAnnealingLR(optimizer, T_max=1000, eta_min=1e-6)
-# scheduler = SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[50])
+scheduler1 = LinearLR(optimizer, start_factor=0.05, total_iters=30)
+scheduler2 = CosineAnnealingLR(optimizer, T_max=1000, eta_min=3e-4)
+scheduler = SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[30])
 
 # logger.level("INFO")
 
@@ -54,6 +69,7 @@ optimizer = Adam(model.parameters(), lr=1e-5)
 def validate_generate(step):
     num_correct = 0
     total_edit_distance = 0
+    total_diff = 0
     total = 0
     for seq, masked_tgt, src_masked, src_lengths in val_dataloader:
         src_masked = src_masked.to(device)
@@ -84,9 +100,10 @@ def validate_generate(step):
         else:
             logger.info(f"{initial_src_masked_text=} {pred=} {gold=} {seq=} {src_masked=}")
         total_edit_distance += editdistance.eval(gold, pred)
+        total_diff += abs(int(gold) - (int(pred) if pred else 0))
         total += 1
     writer.add_scalar("accuracy/val", num_correct/total, step)
-    logger.info(f"accuracy={num_correct/total} avg_edit_distance={total_edit_distance/total} {num_correct=} {total_edit_distance=}")
+    logger.info(f"accuracy={num_correct/total} avg_edit_distance={total_edit_distance/total} {num_correct=} {total_edit_distance=} {total_diff=}")
 
 
 def validate(step):
@@ -145,9 +162,10 @@ for epoch in range(20):
         # logger.info(loss)
         
         loss.backward()
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        # scheduler.step()
-        # writer.add_scalar("lr", scheduler.get_last_lr()[0], step)
+        scheduler.step()
+        writer.add_scalar("lr", scheduler.get_last_lr()[0], step)
         logger.info(f"loss: {loss}")
         step += 1
         if step % 20 == 0:

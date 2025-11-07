@@ -6,7 +6,7 @@ from loguru import logger
 
 
 class AdditionDataset(Dataset):
-    def __init__(self, num_data=1000, max_int=10):
+    def __init__(self, num_data=1000, max_int=100):
         self.num_data = num_data
         self.max_int = max_int
         self.data = self._generate_data()

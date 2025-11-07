@@ -16,13 +16,17 @@ from loguru import logger
 Gotchas:
 
 RMSNorm
-  - Learnable reweighing
+  - learnable reweighing
   - epsilon to avoid NaN
   - rsqrt is more stable
+  - final layer post-norm (optional, but works better without)
 
 MHA
   - padding token logits to -inf
   - padded token rows go NaN because of all -inf
+
+Init
+  - embeddings need MUCH lower variance for init (1 -> 0.02)
 
 General
   - nn.ModuleList instead of simple list, to make sure parameters are correctly
@@ -31,6 +35,11 @@ General
   - math.sqrt instead of torch.sqrt(torch.tensor(dh)), messes with datatypes
     torch.tensor(dh) defaults to Long on CPU -> sqrt on integers is invalid and can also create device/dtype mismatches
 """
+
+
+def log_if_nan(tensor_obj, descriptor):
+    if tensor_obj.isnan().any():
+        logger.info(f"{descriptor}={tensor_obj}")
 
 
 class RMSNorm(nn.Module):
@@ -49,8 +58,9 @@ class RMSNorm(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, dim, nheads):
+    def __init__(self, dim, nheads, layer_i):
         super().__init__()
+        self.layer_i = layer_i
         self.dim = dim
         self.nheads = nheads
         self.dim_head = int(self.dim / nheads)
@@ -80,6 +90,7 @@ class MultiHeadAttention(nn.Module):
         # [B, h, N, N]
         qkt = q @ k
         qkt = qkt / math.sqrt(dh)
+        log_if_nan(qkt, f"qkt_1_{self.layer_i}")
 
         # causal mask [N, N]
         causal_mask = torch.triu(torch.ones([N, N], device=x.device, dtype=torch.bool), diagonal=1)
@@ -101,18 +112,20 @@ class MultiHeadAttention(nn.Module):
         y = y.transpose(1, 2)
         y = y.reshape([B, N, d])
         y = self.proj(y)
+        log_if_nan(y, f"y_1_{self.layer_i}")
 
         return y
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, dim, nheads):
+    def __init__(self, dim, nheads, layer_i):
         super().__init__()
+        self.layer_i = layer_i
         self.dim = dim
         self.nheads = nheads
         self.rms_x = RMSNorm(self.dim)
         self.rms_y = RMSNorm(self.dim)
-        self.mha = MultiHeadAttention(self.dim, self.nheads)
+        self.mha = MultiHeadAttention(self.dim, self.nheads, self.layer_i)
         self.ffn = nn.Sequential(
             nn.Linear(self.dim, 4 * self.dim),
             nn.GELU(),  # or ReLU/SiLU
@@ -129,6 +142,8 @@ class TransformerBlock(nn.Module):
 
         norm_y = self.rms_y(y)
         z = y + self.ffn(norm_y)
+        if z.isnan().any():
+            logger.info(f"{z=}")
 
         return z
 
@@ -136,18 +151,22 @@ class TransformerBlock(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, vocab_size, max_length):
         super().__init__()
-        self.dim = 256  # hence forth referred to as `d`
+        self.dim = 512  # hence forth referred to as `d`
         self.nheads = 4
         self.max_length = max_length
         self.vocab_size = vocab_size
         self.word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
-        self.inverse_word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
-        self.position_embeddings = nn.Parameter(torch.empty(self.max_length, self.dim))
-        # self.position_embeddings.data.normal_(mean=0.0, std=1.0)
-        self.nlayers = 4
+        # Scale down embedding initialization
+        self.word_embeddings.weight.data.normal_(mean=0.0, std=0.02)
+        # self.inverse_word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
+        self.position_embeddings = nn.Parameter(torch.zeros(self.max_length, self.dim))
+        # Use smaller std to avoid dominating word embeddings
+        self.position_embeddings.data.normal_(mean=0.0, std=0.02)
+        self.nlayers = 8
         self.transformer_blocks = nn.ModuleList(
-            [TransformerBlock(dim=self.dim, nheads=self.nheads) for i in range(self.nlayers)]
+            [TransformerBlock(dim=self.dim, nheads=self.nheads, layer_i=i) for i in range(self.nlayers)]
         )
+        # self.final_norm = RMSNorm(self.dim)
         assert self.word_embeddings.padding_idx == 0
 
     # x: [batch_size (B), num_tokens (N)]
@@ -156,14 +175,17 @@ class Transformer(nn.Module):
         indices = x.view([-1])
         mask = torch.where(indices != self.word_embeddings.padding_idx, torch.ones_like(indices), float(0))
 
+        # Add position embeddings only up to sequence length N (might be < max_length during inference)
+        # x = self.word_embeddings(x) + self.position_embeddings[:N]
         x = self.word_embeddings(x) + self.position_embeddings
         mask = mask.view([B, N, 1])
 
         for i in range(self.nlayers):
             x = self.transformer_blocks[i](x, mask)
 
+        # x = self.final_norm(x)
+        logits = x @ self.word_embeddings.weight.transpose(0, 1)
         # logits = x @ self.inverse_word_embeddings.weight.transpose(0, 1)
-        logits = x @ self.inverse_word_embeddings.weight.transpose(0, 1)
         # print(logits.shape)
 
         return logits
