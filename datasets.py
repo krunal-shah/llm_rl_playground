@@ -1,4 +1,5 @@
 from torch.utils.data import Dataset
+from dataset_utils import process_src_tgt_tensors
 import random
 import torch
 import math
@@ -6,7 +7,7 @@ from loguru import logger
 
 
 class AdditionDataset(Dataset):
-    def __init__(self, num_data=1000, max_int=100):
+    def __init__(self, num_data=10000, max_int=100):
         self.num_data = num_data
         self.max_int = max_int
         self.data = self._generate_data()
@@ -14,7 +15,7 @@ class AdditionDataset(Dataset):
         self._generate_vocab()
 
     def text_to_tensor(self, text):
-        logger.debug(text)
+        # logger.debug(text)
         c = ""
         i = 0
         ints = []
@@ -29,7 +30,8 @@ class AdditionDataset(Dataset):
         return torch.tensor(ints, dtype=torch.long)
 
     def tensor_to_text(self, preds):
-        preds = preds.tolist()
+        if isinstance(preds, torch.Tensor):
+            preds = preds.tolist()
         pred_string = ""
         for i in preds:
             if i == self.pad_idx:
@@ -46,30 +48,7 @@ class AdditionDataset(Dataset):
 
         src = self.text_to_tensor(src_text)
         tgt = self.text_to_tensor(tgt_text)
-        src_length, tgt_length = src.shape[0], tgt.shape[0]
-        logger.debug(f"{src_length=}, {tgt_length=}")
-        seq_length = src_length + tgt_length
-        pad_length = self.max_length - seq_length
-        pad = torch.ones([pad_length], dtype=src.dtype) * self.pad_idx
-
-        seq = torch.cat([src, tgt, pad], axis=0)
-        logger.debug(torch.ones([src_length - 1]) * self.pad_idx)
-        logger.debug(torch.ones([tgt_length]))
-        logger.debug(torch.ones([pad_length + 1] * self.pad_idx))
-        # mask = torch.cat([torch.ones([seq_length]), torch.zeros([pad_length])], axis=0)
-        masked_tgt = torch.cat([
-                                    torch.ones([src_length - 1], dtype=src.dtype) * self.pad_idx,
-                                    tgt,
-                                    torch.ones([pad_length + 1], dtype=src.dtype) * self.pad_idx
-                                ], axis=0)
-
-        src_masked = torch.cat([
-                                    src,
-                                    torch.ones([pad_length + tgt_length], dtype=src.dtype) * self.pad_idx
-                                ], axis=0)
-        # logger.info(f"{src_text=} {tgt_text=} {seq=}")
-
-        return seq, masked_tgt, src_masked, src_length
+        return process_src_tgt_tensors(src, tgt, self.max_length, self.pad_idx)
 
     def __len__(self):
         return self.num_data

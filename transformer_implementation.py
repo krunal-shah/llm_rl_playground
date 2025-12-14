@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import math
 from loguru import logger
-
+import pdb
 """
 Gotchas:
 
@@ -149,13 +149,15 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, vocab_size, max_length):
+    def __init__(self, vocab_size, max_length, eos_idx):
         super().__init__()
         self.dim = 512  # hence forth referred to as `d`
         self.nheads = 4
         self.max_length = max_length
         self.vocab_size = vocab_size
+        self.eos_idx = eos_idx
         self.word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
+        self.pad_idx = self.word_embeddings.padding_idx
         # Scale down embedding initialization
         self.word_embeddings.weight.data.normal_(mean=0.0, std=0.02)
         # self.inverse_word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
@@ -186,19 +188,42 @@ class Transformer(nn.Module):
         # x = self.final_norm(x)
         logits = x @ self.word_embeddings.weight.transpose(0, 1)
         # logits = x @ self.inverse_word_embeddings.weight.transpose(0, 1)
-        # print(logits.shape)
 
         return logits
 
+    def generate(self, src):
+        # logger.info(f"{src.shape=}")
+        src_lengths = torch.count_nonzero(src != self.pad_idx, dim=-1)
+        device = src.device
+        batch_size = src.shape[0]
 
-# class TransformerSFT(Transformer):
-#     def forward(self, x, tgt_mask):
+        eos_predictions = torch.tensor([False], device=device)
+        lengths_maxed = torch.tensor([False], device=device)
+        # logger.info(f"{src.shape}")
+        while (not torch.logical_or(eos_predictions, lengths_maxed)._is_all_true()):
+            # logger.info(f"{src}")
+            logits = self(src)
+            # logger.info(f"{logits.shape=}")
+            # logger.info(f"{src_lengths=}")
+            # pdb.set_trace()
+            batch_indices = torch.arange(batch_size, device=logits.device)
+            # logger.info(f"{src=} {src_lengths=} {logits=}")
+            logits = logits[batch_indices, src_lengths - 1, :].squeeze(1)
+            # logger.info(f"{logits=}")
 
+            # logger.info(f"{logits.shape=}")
+            predictions = torch.argmax(logits, dim=-1, keepdim=False)
 
-
-# transformer = Transformer()
-
-# x = torch.randint(high = 10000, size = (2, 50))
-# x = torch.tensor([[1, 2, 3, 4, 0, 0], [5, 6, 0, 0, 0, 0]])
-
-# y = transformer(x)
+            # logger.info(f"{predictions.shape=}")
+            # logger.info(f"{src=}")
+            src[batch_indices, src_lengths] = predictions
+            # logger.info(f"{predictions} {src=}")
+            # logger.info(f"{src.shape=}")
+            eos_predictions = (predictions == self.eos_idx)
+            lengths_maxed = (src_lengths == (self.max_length - 1))
+            src_lengths = torch.where((~eos_predictions) & (~lengths_maxed), src_lengths + 1, src_lengths)
+            # logger.info(f"{predictions=} {src=} {eos_predictions=} {src_lengths=} {lengths_maxed=}")
+        # logger.info(f"{src.shape=}")
+        # logger.info(f"{src=}")
+        # pdb.set_trace()
+        return src

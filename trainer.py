@@ -9,6 +9,8 @@ from datasets import AdditionDataset
 from transformer_implementation import Transformer
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+import pdb
 
 """
 Gotchas:
@@ -37,14 +39,21 @@ logger.add(
     ),
 )
 
-full_dataset = AdditionDataset()
-generator = torch.Generator().manual_seed(42)
-train_dataset, val_dataset, test_dataset = random_split(full_dataset, [0.95, 0.025, 0.025], generator=generator)
-max_length = full_dataset.max_length
 
-train_dataloader = DataLoader(train_dataset, batch_size=64)
-val_dataloader = DataLoader(val_dataset)
-test_dataloader = DataLoader(test_dataset)
+def generate_dataset():
+    full_dataset = AdditionDataset()
+    generator = torch.Generator().manual_seed(42)
+    train_dataset, val_dataset, test_dataset = random_split(full_dataset, [0.9, 0.05, 0.05], generator=generator)
+
+    train_dataloader = DataLoader(train_dataset, batch_size=64)
+    val_dataloader = DataLoader(val_dataset, batch_size=8)
+    test_dataloader = DataLoader(test_dataset)
+
+    return full_dataset, train_dataloader, val_dataloader, test_dataloader
+
+
+full_dataset, train_dataloader, val_dataloader, test_dataloader = generate_dataset()
+max_length = full_dataset.max_length
 
 if torch.backends.mps.is_available:
     logger.info("Using MPS")
@@ -53,8 +62,9 @@ else:
     logger.info("Using CPU")
     device = torch.device('cpu')
 
+
 writer = SummaryWriter()
-model = Transformer(vocab_size=full_dataset.vocab_size(), max_length=max_length)
+model = Transformer(vocab_size=full_dataset.vocab_size(), max_length=max_length, eos_idx=full_dataset.eos_idx)
 model = model.to(device)
 criterion = CrossEntropyLoss(ignore_index=full_dataset.pad_idx)
 optimizer = Adam(model.parameters(), lr=5e-4)
@@ -66,58 +76,56 @@ scheduler = SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milesto
 # logger.level("INFO")
 
 
-def validate_generate(step):
-    num_correct = 0
-    total_edit_distance = 0
-    total_diff = 0
-    total = 0
-    for seq, masked_tgt, src_masked, src_lengths in val_dataloader:
-        src_masked = src_masked.to(device)
-        initial_src_masked_text = full_dataset.tensor_to_text(src_masked[0])
-        src_lengths = src_lengths.to(device)
-
-        max_length = src_masked.shape[-1]
-        eos_predictions = torch.tensor([False], device=device)
-        lengths_maxed = torch.tensor([False], device=device)
-        while (not eos_predictions._is_all_true()) and (not lengths_maxed._is_all_true()):
-            # logger.info(f"{src_masked=}")
-            logits = model(src_masked)
-            # logger.info(f"{logits=}")
-            logits = logits[:, src_lengths - 1, :].squeeze(1)
-
-            predictions = torch.argmax(logits, dim=-1, keepdim=False)
-            # logger.info(f"{logits=} {predictions=}")
-
-            src_masked[:, src_lengths] = predictions
-            eos_predictions = (predictions == full_dataset.eos_idx)
-            lengths_maxed = (src_lengths == (max_length - 1))
-            src_lengths = torch.where((~eos_predictions) & (~lengths_maxed), src_lengths + 1, src_lengths)
-            # logger.info(f"{src_lengths=} {lengths_maxed=} {src_masked=} {eos_predictions=}")
-        gold = full_dataset.tensor_to_text(seq[0])[len(initial_src_masked_text):]
-        pred = full_dataset.tensor_to_text(src_masked[0])[len(initial_src_masked_text):]
+def compute_generation_metrics(prompts, golds, preds):
+    num_samples = len(prompts)
+    accuracy = 0
+    edit_distance = 0
+    for prompt, gold, pred in zip(prompts, golds, preds):
         if gold == pred:
-            num_correct += 1
-        else:
-            logger.info(f"{initial_src_masked_text=} {pred=} {gold=} {seq=} {src_masked=}")
-        total_edit_distance += editdistance.eval(gold, pred)
-        total_diff += abs(int(gold) - (int(pred) if pred else 0))
-        total += 1
-    writer.add_scalar("accuracy/val", num_correct/total, step)
-    logger.info(f"accuracy={num_correct/total} avg_edit_distance={total_edit_distance/total} {num_correct=} {total_edit_distance=} {total_diff=}")
+            accuracy += 1
+        edit_distance += editdistance.eval(gold, pred)
+        logger.debug(f"{prompt=} {gold=} {pred=}")
+    logger.info(f"accuracy = {accuracy/num_samples}, edit_distance = {edit_distance/num_samples}, {num_samples=}")
+
+
+def validate_generate(seq, src_masked):
+    input_src_lengths = torch.count_nonzero(src_masked != model.pad_idx, dim=-1)
+    pred_tensor = model.generate(src_masked)
+
+    seq = seq.tolist()
+    pred_list = pred_tensor.tolist()
+    prompts, golds, preds = [], [], []
+    for i in range(len(pred_list)):
+        prompt = full_dataset.tensor_to_text(seq[i])
+        gold = full_dataset.tensor_to_text(seq[i][input_src_lengths[i]:])
+        pred = full_dataset.tensor_to_text(pred_list[i][input_src_lengths[i]:])
+        prompts.append(prompt)
+        golds.append(gold)
+        preds.append(pred)
+    return prompts, golds, preds
 
 
 def validate(step):
     avg_loss = 0
     batches = 0
-    for seq, masked_tgt, _, _ in val_dataloader:
+    prompts, golds, preds = [], [], []
+    for seq, masked_tgt, src_masked in tqdm(val_dataloader):
         seq = seq.to(device)
+        src_masked = src_masked.to(device)
         logits = model(seq)
         logits = logits.reshape([-1, logits.shape[-1]])
         masked_tgt = masked_tgt.reshape([-1])
         masked_tgt = masked_tgt.to(device)
         loss = criterion(logits, masked_tgt)
         avg_loss += loss
+
+        _prompts, _golds, _preds = validate_generate(seq, src_masked)
+        prompts += _prompts
+        golds += _golds
+        preds += _preds
+
         batches += 1
+    compute_generation_metrics(prompts, golds, preds)
     writer.add_scalar("loss/val", avg_loss/batches, step)
     logger.info(f"VALIDATE = {avg_loss/batches}")
 
@@ -127,40 +135,25 @@ step = 0
 model.train()
 for epoch in range(20):
     logger.info(f"Epoch: {epoch}")
-    for seq, masked_tgt, _, _ in train_dataloader:
+    for seq, masked_tgt, _ in train_dataloader:
         optimizer.zero_grad()
 
-        logger.debug(seq)
         seq = seq.to(device)
         masked_tgt = masked_tgt.to(device)
-        
-        logger.debug(seq)
-        logger.debug(masked_tgt)
-        
+
         # seq: [batch_size (B), num_tokens (N)]
         # logits: [B, N, vocabulary size (C)]
         logits = model(seq)
-        
-        logger.debug(logits.shape)
-        
+
         logits = logits.reshape([-1, logits.shape[-1]])
-        
-        logger.debug(logits.shape)
-        
+
         masked_tgt = masked_tgt.reshape([-1])
-        
-        logger.debug(masked_tgt.shape)
-        logger.debug(f"{seq=} {seq.shape=}")
-        logger.debug(f"{logits=} {logits.shape=}")
-        logger.debug(f"{masked_tgt=} {masked_tgt.shape=}")
-        logger.debug(f"{torch.argmax(logits, dim=-1)}")
-        logger.debug(f"{seq.reshape([-1])}")
-        
+
         loss = criterion(logits, masked_tgt)
         writer.add_scalar("loss/train", loss, step)
-        
+
         # logger.info(loss)
-        
+
         loss.backward()
         # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
@@ -172,7 +165,6 @@ for epoch in range(20):
             logger.info(f"Epoch: {epoch}, Step: {step}")
             model.eval()
             validate(step)
-            validate_generate(step)
             model.train()
 
 writer.flush()
