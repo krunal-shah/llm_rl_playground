@@ -152,7 +152,8 @@ class Transformer(nn.Module):
     def __init__(self, vocab_size, max_length, eos_idx):
         super().__init__()
         self.dim = 512  # hence forth referred to as `d`
-        self.nheads = 4
+        self.nheads = 8
+        self.nlayers = 8
         self.max_length = max_length
         self.vocab_size = vocab_size
         self.eos_idx = eos_idx
@@ -164,7 +165,6 @@ class Transformer(nn.Module):
         self.position_embeddings = nn.Parameter(torch.zeros(self.max_length, self.dim))
         # Use smaller std to avoid dominating word embeddings
         self.position_embeddings.data.normal_(mean=0.0, std=0.02)
-        self.nlayers = 8
         self.transformer_blocks = nn.ModuleList(
             [TransformerBlock(dim=self.dim, nheads=self.nheads, layer_i=i) for i in range(self.nlayers)]
         )

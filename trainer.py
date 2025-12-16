@@ -10,7 +10,7 @@ from transformer_implementation import Transformer
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-import pdb
+from datetime import datetime
 
 """
 Gotchas:
@@ -63,14 +63,14 @@ else:
     device = torch.device('cpu')
 
 
-writer = SummaryWriter()
+writer = SummaryWriter(log_dir=f"runs/active/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
 model = Transformer(vocab_size=full_dataset.vocab_size(), max_length=max_length, eos_idx=full_dataset.eos_idx)
 model = model.to(device)
 criterion = CrossEntropyLoss(ignore_index=full_dataset.pad_idx)
 optimizer = Adam(model.parameters(), lr=5e-4)
 
 scheduler1 = LinearLR(optimizer, start_factor=0.05, total_iters=30)
-scheduler2 = CosineAnnealingLR(optimizer, T_max=1000, eta_min=3e-4)
+scheduler2 = CosineAnnealingLR(optimizer, T_max=800, eta_min=1e-5)
 scheduler = SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[30])
 
 # logger.level("INFO")
@@ -86,6 +86,9 @@ def compute_generation_metrics(prompts, golds, preds):
         edit_distance += editdistance.eval(gold, pred)
         logger.debug(f"{prompt=} {gold=} {pred=}")
     logger.info(f"accuracy = {accuracy/num_samples}, edit_distance = {edit_distance/num_samples}, {num_samples=}")
+    writer.add_scalar("accuracy", accuracy/num_samples, step)
+    writer.add_scalar("edit_distance", edit_distance/num_samples, step)
+    writer.add_scalar("num_samples", num_samples, step)
 
 
 def validate_generate(seq, src_masked):
