@@ -43,10 +43,10 @@ logger.add(
 def generate_dataset():
     full_dataset = AdditionDataset()
     generator = torch.Generator().manual_seed(42)
-    train_dataset, val_dataset, test_dataset = random_split(full_dataset, [0.9, 0.05, 0.05], generator=generator)
+    train_dataset, val_dataset, test_dataset = random_split(full_dataset, [0.96, 0.02, 0.02], generator=generator)
 
-    train_dataloader = DataLoader(train_dataset, batch_size=64)
-    val_dataloader = DataLoader(val_dataset, batch_size=8)
+    train_dataloader = DataLoader(train_dataset, batch_size=128)
+    val_dataloader = DataLoader(val_dataset, batch_size=64)
     test_dataloader = DataLoader(test_dataset)
 
     return full_dataset, train_dataloader, val_dataloader, test_dataloader
@@ -67,10 +67,10 @@ writer = SummaryWriter(log_dir=f"runs/active/{datetime.now().strftime('%Y-%m-%d_
 model = Transformer(vocab_size=full_dataset.vocab_size(), max_length=max_length, eos_idx=full_dataset.eos_idx)
 model = model.to(device)
 criterion = CrossEntropyLoss(ignore_index=full_dataset.pad_idx)
-optimizer = Adam(model.parameters(), lr=5e-4)
+optimizer = Adam(model.parameters(), lr=2e-4)
 
 scheduler1 = LinearLR(optimizer, start_factor=0.05, total_iters=30)
-scheduler2 = CosineAnnealingLR(optimizer, T_max=800, eta_min=1e-5)
+scheduler2 = CosineAnnealingLR(optimizer, T_max=1400, eta_min=1e-5)
 scheduler = SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[30])
 
 # logger.level("INFO")
@@ -161,7 +161,7 @@ for epoch in range(20):
         writer.add_scalar("lr", scheduler.get_last_lr()[0], step)
         logger.info(f"loss: {loss}")
         step += 1
-        if step % 20 == 0:
+        if step % 50 == 0:
             logger.info(f"Epoch: {epoch}, Step: {step}")
             model.eval()
             validate(step)

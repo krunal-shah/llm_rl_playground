@@ -151,8 +151,8 @@ class Transformer(nn.Module):
     def __init__(self, vocab_size, max_length, eos_idx):
         super().__init__()
         self.dim = 512  # hence forth referred to as `d`
-        self.nheads = 8
-        self.nlayers = 8
+        self.nheads = 16
+        self.nlayers = 32
         self.max_length = max_length
         self.vocab_size = vocab_size
         self.eos_idx = eos_idx
