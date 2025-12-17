@@ -11,7 +11,6 @@ import torch
 import torch.nn as nn
 import math
 from loguru import logger
-import pdb
 """
 Gotchas:
 
@@ -192,38 +191,69 @@ class Transformer(nn.Module):
         return logits
 
     def generate(self, src):
-        # logger.info(f"{src.shape=}")
-        src_lengths = torch.count_nonzero(src != self.pad_idx, dim=-1)
-        device = src.device
-        batch_size = src.shape[0]
+        inp = src.clone()
+        inp_lengths = torch.count_nonzero(inp != self.pad_idx, dim=-1)
+        device = inp.device
+        batch_size = inp.shape[0]
 
-        eos_predictions = torch.tensor([False], device=device)
-        lengths_maxed = torch.tensor([False], device=device)
-        # logger.info(f"{src.shape}")
-        while (not torch.logical_or(eos_predictions, lengths_maxed)._is_all_true()):
-            # logger.info(f"{src}")
-            logits = self(src)
-            # logger.info(f"{logits.shape=}")
-            # logger.info(f"{src_lengths=}")
-            # pdb.set_trace()
+        incomplete = torch.ones([batch_size], dtype=torch.bool, device=device)
+        while incomplete.any():
+            logits = self(inp)
             batch_indices = torch.arange(batch_size, device=logits.device)
-            # logger.info(f"{src=} {src_lengths=} {logits=}")
-            logits = logits[batch_indices, src_lengths - 1, :].squeeze(1)
-            # logger.info(f"{logits=}")
+            logits = logits[batch_indices, inp_lengths - 1, :].squeeze(1)
 
-            # logger.info(f"{logits.shape=}")
+            predictions = torch.where(incomplete, torch.argmax(logits, dim=-1, keepdim=False), self.eos_idx)
+            inp[batch_indices, inp_lengths] = predictions
+
+            non_eos_predictions = (predictions != self.eos_idx)
+            lengths_not_maxed = (inp_lengths != (self.max_length - 1))
+            incomplete = torch.logical_and(non_eos_predictions, lengths_not_maxed)
+            inp_lengths = torch.where(incomplete, inp_lengths + 1, inp_lengths)
+
+        return inp
+
+    def generate_with_dynamic_batching(self, src):
+        # src is the input tensor with only the inputs as non-pad tensors and everything else masked (pad_idx)
+        inp = src.clone()
+        device = inp.device
+        incomplete_inp = inp.clone()
+        incomplete_inp_lengths = torch.count_nonzero(incomplete_inp != self.pad_idx, dim=-1)
+        incomplete_inp_indices = torch.arange(inp.shape[0], device=device)
+
+        while incomplete_inp.shape[0]:
+            logits = self(incomplete_inp)
+            incomplete_inp_batch_indices = torch.arange(incomplete_inp.shape[0], device=device)
+            logits = logits[incomplete_inp_batch_indices, incomplete_inp_lengths - 1, :].squeeze(1)
+
             predictions = torch.argmax(logits, dim=-1, keepdim=False)
 
-            # logger.info(f"{predictions.shape=}")
-            # logger.info(f"{src=}")
-            src[batch_indices, src_lengths] = predictions
-            # logger.info(f"{predictions} {src=}")
-            # logger.info(f"{src.shape=}")
-            eos_predictions = (predictions == self.eos_idx)
-            lengths_maxed = (src_lengths == (self.max_length - 1))
-            src_lengths = torch.where((~eos_predictions) & (~lengths_maxed), src_lengths + 1, src_lengths)
-            # logger.info(f"{predictions=} {src=} {eos_predictions=} {src_lengths=} {lengths_maxed=}")
-        # logger.info(f"{src.shape=}")
-        # logger.info(f"{src=}")
-        # pdb.set_trace()
-        return src
+            incomplete_inp[incomplete_inp_batch_indices, incomplete_inp_lengths] = predictions
+
+            non_eos_predictions = (predictions != self.eos_idx)
+            lengths_not_maxed = (incomplete_inp_lengths != (self.max_length - 1))
+
+            incomplete = torch.logical_and(non_eos_predictions, lengths_not_maxed)
+            complete = torch.logical_not(incomplete)
+
+            complete_arg = torch.argwhere(complete)
+            complete_arg_squeezed = complete_arg.squeeze(-1)
+            complete_arg = complete_arg.expand(-1, incomplete_inp.shape[-1])
+
+            incomplete_arg = torch.argwhere(incomplete)
+            incomplete_arg_squeezed = incomplete_arg.squeeze(-1)
+            incomplete_arg = incomplete_arg.expand(-1, incomplete_inp.shape[-1])
+
+            complete_inp = torch.gather(input=incomplete_inp, dim=0, index=complete_arg)
+            incomplete_inp = torch.gather(input=incomplete_inp, dim=0, index=incomplete_arg)
+
+            complete_inp_indices = torch.gather(input=incomplete_inp_indices, dim=0, index=complete_arg_squeezed)
+            complete_inp_indices = complete_inp_indices.unsqueeze(-1).expand(-1, complete_inp.shape[-1])
+            incomplete_inp_indices = torch.gather(input=incomplete_inp_indices, dim=0, index=incomplete_arg_squeezed)
+
+            inp.scatter_(dim=0, index=complete_inp_indices, src=complete_inp)
+
+            incomplete_inp_lengths = torch.gather(
+                input=incomplete_inp_lengths, dim=0, index=incomplete_arg_squeezed
+            ) + 1
+
+        return inp

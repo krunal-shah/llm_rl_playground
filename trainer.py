@@ -133,7 +133,6 @@ def validate(step):
     logger.info(f"VALIDATE = {avg_loss/batches}")
 
 
-# torch.set_printoptions(threshold=10_000)
 step = 0
 model.train()
 for epoch in range(20):
@@ -154,8 +153,6 @@ for epoch in range(20):
 
         loss = criterion(logits, masked_tgt)
         writer.add_scalar("loss/train", loss, step)
-
-        # logger.info(loss)
 
         loss.backward()
         # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
