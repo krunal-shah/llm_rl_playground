@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import math
 from loguru import logger
+
 """
 Gotchas:
 
@@ -148,11 +149,11 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, vocab_size, max_length, eos_idx):
+    def __init__(self, vocab_size, max_length, eos_idx, dim=512, nheads=16, nlayers=32):
         super().__init__()
-        self.dim = 512  # hence forth referred to as `d`
-        self.nheads = 16
-        self.nlayers = 32
+        self.dim = dim  # hence forth referred to as `d`
+        self.nheads = nheads
+        self.nlayers = nlayers
         self.max_length = max_length
         self.vocab_size = vocab_size
         self.eos_idx = eos_idx
@@ -205,8 +206,8 @@ class Transformer(nn.Module):
             predictions = torch.where(incomplete, torch.argmax(logits, dim=-1, keepdim=False), self.eos_idx)
             inp[batch_indices, inp_lengths] = predictions
 
-            non_eos_predictions = (predictions != self.eos_idx)
-            lengths_not_maxed = (inp_lengths != (self.max_length - 1))
+            non_eos_predictions = predictions != self.eos_idx
+            lengths_not_maxed = inp_lengths != (self.max_length - 1)
             incomplete = torch.logical_and(non_eos_predictions, lengths_not_maxed)
             inp_lengths = torch.where(incomplete, inp_lengths + 1, inp_lengths)
 
@@ -229,8 +230,8 @@ class Transformer(nn.Module):
 
             incomplete_inp[incomplete_inp_batch_indices, incomplete_inp_lengths] = predictions
 
-            non_eos_predictions = (predictions != self.eos_idx)
-            lengths_not_maxed = (incomplete_inp_lengths != (self.max_length - 1))
+            non_eos_predictions = predictions != self.eos_idx
+            lengths_not_maxed = incomplete_inp_lengths != (self.max_length - 1)
 
             incomplete = torch.logical_and(non_eos_predictions, lengths_not_maxed)
             complete = torch.logical_not(incomplete)
@@ -252,8 +253,8 @@ class Transformer(nn.Module):
 
             inp.scatter_(dim=0, index=complete_inp_indices, src=complete_inp)
 
-            incomplete_inp_lengths = torch.gather(
-                input=incomplete_inp_lengths, dim=0, index=incomplete_arg_squeezed
-            ) + 1
+            incomplete_inp_lengths = (
+                torch.gather(input=incomplete_inp_lengths, dim=0, index=incomplete_arg_squeezed) + 1
+            )
 
         return inp
