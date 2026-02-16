@@ -23,7 +23,11 @@ from hparams import (
     TRAIN_BATCH_SIZE,
     TRAIN_SPLIT,
     VAL_BATCH_SIZE,
+    VAL_EVERY_NSTEPS,
     VAL_SPLIT,
+    MODEL_LOAD_PATH,
+    SAVE_EVERY_NSTEPS,
+    EXP_NAME,
 )
 from logger import logger
 from transformer_implementation import Transformer
@@ -79,6 +83,9 @@ model = Transformer(
     nlayers=MODEL_NLAYERS,
 )
 model = model.to(device)
+if MODEL_LOAD_PATH:
+    model.load_state_dict(torch.load(MODEL_LOAD_PATH, weights_only=True))
+    logger.info(f"Loading model from {MODEL_LOAD_PATH}")
 criterion = CrossEntropyLoss(ignore_index=full_dataset.pad_idx)
 optimizer = Adam(model.parameters(), lr=LR)
 
@@ -89,7 +96,8 @@ scheduler = SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milesto
 
 def validate_generate(seq, src_masked):
     input_src_lengths = torch.count_nonzero(src_masked != model.pad_idx, dim=-1)
-    pred_tensor, pred_probs = model.generate(src_masked)
+    output = model.generate(src_masked)
+    pred_tensor = output["preds"]
 
     seq = seq.tolist()
     pred_list = pred_tensor.tolist()
@@ -164,10 +172,15 @@ for epoch in range(20):
         writer.add_scalar("lr", scheduler.get_last_lr()[0], step)
         logger.info(f"loss: {loss}")
         step += 1
-        if step % 50 == 0:
+        if step % VAL_EVERY_NSTEPS == 0:
             logger.info(f"Epoch: {epoch}, Step: {step}")
             model.eval()
             validate(step)
             model.train()
+
+        if step % SAVE_EVERY_NSTEPS == 0:
+            logger.info(f"Saving model to checkpoints/{EXP_NAME}")
+            torch.save(model.state_dict(), f"checkpoints/{EXP_NAME}")
+
 
 writer.flush()
