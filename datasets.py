@@ -90,9 +90,16 @@ class AdditionDataset(Dataset):
         for i in range(self.num_data):
             num1 = random.randrange(self.max_int)
             num2 = random.randrange(self.max_int)
+            num3 = num1 + num2
             # src = f"<sos>{num1}="
             # tgt = f"{num1}<eos>"
+            num1 = f"{num1}"
+            num1 = num1[::-1]
+            num2 = f"{num2}"
+            num2 = num2[::-1]
             src = f"<sos>{num1}+{num2}="
-            tgt = f"{num1 + num2}<eos>"
+            tgt = f"{num3}"
+            tgt = tgt[::-1]
+            tgt = f"{tgt}<eos>"
             datas.append({"src": src, "tgt": tgt})
         return datas

@@ -89,7 +89,7 @@ scheduler = SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milesto
 
 def validate_generate(seq, src_masked):
     input_src_lengths = torch.count_nonzero(src_masked != model.pad_idx, dim=-1)
-    pred_tensor = model.generate(src_masked)
+    pred_tensor, pred_probs = model.generate(src_masked)
 
     seq = seq.tolist()
     pred_list = pred_tensor.tolist()
@@ -132,7 +132,7 @@ def validate(step):
 
 step = 0
 num_parameters = sum(p.numel() for p in model.parameters())
-logger.info(f"Number of model parameters = {num_parameters}")
+logger.info("Number of model parameters = ")
 model.train()
 for epoch in range(20):
     logger.info(f"Epoch: {epoch}")
@@ -154,7 +154,9 @@ for epoch in range(20):
         writer.add_scalar("loss/train", loss, step)
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
         total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
         writer.add_scalar("grad_norm", total_norm, global_step=step)
 
         optimizer.step()

@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import math
 from loguru import logger
+from torch.nn.functional import log_softmax
 
 """
 Gotchas:
@@ -178,8 +179,7 @@ class Transformer(nn.Module):
         mask = torch.where(indices != self.word_embeddings.padding_idx, torch.ones_like(indices), float(0))
 
         # Add position embeddings only up to sequence length N (might be < max_length during inference)
-        # x = self.word_embeddings(x) + self.position_embeddings[:N]
-        x = self.word_embeddings(x) + self.position_embeddings
+        x = self.word_embeddings(x) + self.position_embeddings[:N]
         mask = mask.view([B, N, 1])
 
         for i in range(self.nlayers):
@@ -193,68 +193,77 @@ class Transformer(nn.Module):
 
     def generate(self, src):
         inp = src.clone()
-        inp_lengths = torch.count_nonzero(inp != self.pad_idx, dim=-1)
         device = inp.device
         batch_size = inp.shape[0]
 
+        inp_probs = torch.zeros_like(inp, dtype=torch.float32)
+        inp_probs[inp != self.pad_idx] = 1.0
+        inp_lengths = torch.count_nonzero(inp != self.pad_idx, dim=-1)
+
         incomplete = torch.ones([batch_size], dtype=torch.bool, device=device)
         while incomplete.any():
-            logits = self(inp)
-            batch_indices = torch.arange(batch_size, device=logits.device)
-            logits = logits[batch_indices, inp_lengths - 1, :].squeeze(1)
+            # create temp tensors for the forward pass of incomplete rows
+            incomplete_inp_lengths = inp_lengths[incomplete]
+            incomplete_inp_indices = torch.arange(incomplete_inp_lengths.shape[0], device=device)
+            last_chance_incomplete = incomplete_inp_lengths == self.max_length - 1
 
-            predictions = torch.where(incomplete, torch.argmax(logits, dim=-1, keepdim=False), self.eos_idx)
-            inp[batch_indices, inp_lengths] = predictions
-
-            non_eos_predictions = predictions != self.eos_idx
-            lengths_not_maxed = inp_lengths != (self.max_length - 1)
-            incomplete = torch.logical_and(non_eos_predictions, lengths_not_maxed)
-            inp_lengths = torch.where(incomplete, inp_lengths + 1, inp_lengths)
-
-        return inp
-
-    def generate_with_dynamic_batching(self, src):
-        # src is the input tensor with only the inputs as non-pad tensors and everything else masked (pad_idx)
-        inp = src.clone()
-        device = inp.device
-        incomplete_inp = inp.clone()
-        incomplete_inp_lengths = torch.count_nonzero(incomplete_inp != self.pad_idx, dim=-1)
-        incomplete_inp_indices = torch.arange(inp.shape[0], device=device)
-
-        while incomplete_inp.shape[0]:
-            logits = self(incomplete_inp)
-            incomplete_inp_batch_indices = torch.arange(incomplete_inp.shape[0], device=device)
-            logits = logits[incomplete_inp_batch_indices, incomplete_inp_lengths - 1, :].squeeze(1)
+            logits = self(inp)[incomplete]
+            logits = logits[incomplete_inp_indices, incomplete_inp_lengths - 1, :]
+            logit_probs = log_softmax(logits, dim=-1)
 
             predictions = torch.argmax(logits, dim=-1, keepdim=False)
+            # force eos into the ones which have no more room left
+            predictions[last_chance_incomplete] = self.eos_idx
+            prediction_probs = logit_probs[incomplete_inp_indices, predictions]
 
-            incomplete_inp[incomplete_inp_batch_indices, incomplete_inp_lengths] = predictions
+            inp[incomplete, incomplete_inp_lengths] = predictions
+            inp_probs[incomplete, incomplete_inp_lengths] = prediction_probs
 
-            non_eos_predictions = predictions != self.eos_idx
-            lengths_not_maxed = incomplete_inp_lengths != (self.max_length - 1)
+            # advance the length for the ones which are incomplete and did not predict EOS
+            still_incomplete = predictions != self.eos_idx
+            incomplete_inp_lengths[still_incomplete] += 1
 
-            incomplete = torch.logical_and(non_eos_predictions, lengths_not_maxed)
-            complete = torch.logical_not(incomplete)
+            # pour over everything back into the original tensors
+            inp_lengths[incomplete] = incomplete_inp_lengths
+            incomplete[incomplete.clone()] = still_incomplete
 
-            complete_arg = torch.argwhere(complete)
-            complete_arg_squeezed = complete_arg.squeeze(-1)
-            complete_arg = complete_arg.expand(-1, incomplete_inp.shape[-1])
+        return inp, inp_probs
 
-            incomplete_arg = torch.argwhere(incomplete)
-            incomplete_arg_squeezed = incomplete_arg.squeeze(-1)
-            incomplete_arg = incomplete_arg.expand(-1, incomplete_inp.shape[-1])
+    def generate_with_dynamic_batching(self, src):
+        inp = src.clone()
+        device = inp.device
+        batch_size = inp.shape[0]
 
-            complete_inp = torch.gather(input=incomplete_inp, dim=0, index=complete_arg)
-            incomplete_inp = torch.gather(input=incomplete_inp, dim=0, index=incomplete_arg)
+        inp_probs = torch.zeros_like(inp, dtype=torch.float32)
+        inp_probs[inp != self.pad_idx] = 1.0
+        inp_lengths = torch.count_nonzero(inp != self.pad_idx, dim=-1)
 
-            complete_inp_indices = torch.gather(input=incomplete_inp_indices, dim=0, index=complete_arg_squeezed)
-            complete_inp_indices = complete_inp_indices.unsqueeze(-1).expand(-1, complete_inp.shape[-1])
-            incomplete_inp_indices = torch.gather(input=incomplete_inp_indices, dim=0, index=incomplete_arg_squeezed)
+        incomplete = torch.ones([batch_size], dtype=torch.bool, device=device)
+        while incomplete.any():
+            # create temp tensors for the forward pass of incomplete rows
+            incomplete_inp = inp[incomplete]
+            incomplete_inp_lengths = inp_lengths[incomplete]
+            incomplete_inp_indices = torch.arange(incomplete_inp_lengths.shape[0], device=device)
+            last_chance_incomplete = incomplete_inp_lengths == self.max_length - 1
 
-            inp.scatter_(dim=0, index=complete_inp_indices, src=complete_inp)
+            logits = self(incomplete_inp)
+            logits = logits[incomplete_inp_indices, incomplete_inp_lengths - 1, :]
+            logit_probs = log_softmax(logits, dim=-1)
 
-            incomplete_inp_lengths = (
-                torch.gather(input=incomplete_inp_lengths, dim=0, index=incomplete_arg_squeezed) + 1
-            )
+            predictions = torch.argmax(logits, dim=-1, keepdim=False)
+            # force eos into the ones which have no more room left
+            predictions[last_chance_incomplete] = self.eos_idx
+            prediction_probs = logit_probs[incomplete_inp_indices, predictions]
 
-        return inp
+            inp[incomplete, incomplete_inp_lengths] = predictions
+            inp_probs[incomplete, incomplete_inp_lengths] = prediction_probs
+
+            # advance the length for the ones which are incomplete and did not predict EOS
+            still_incomplete = predictions != self.eos_idx
+            incomplete_inp_lengths[still_incomplete] += 1
+
+            # pour over everything back into the original tensors
+            inp_lengths[incomplete] = incomplete_inp_lengths
+            incomplete[incomplete.clone()] = still_incomplete
+
+        return inp, inp_probs
