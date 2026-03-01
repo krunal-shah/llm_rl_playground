@@ -150,7 +150,7 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, vocab_size, max_length, eos_idx, dim=512, nheads=16, nlayers=32):
+    def __init__(self, vocab_size, max_length, eos_idx, pad_idx, dim=512, nheads=16, nlayers=32):
         super().__init__()
         self.dim = dim  # hence forth referred to as `d`
         self.nheads = nheads
@@ -158,8 +158,8 @@ class Transformer(nn.Module):
         self.max_length = max_length
         self.vocab_size = vocab_size
         self.eos_idx = eos_idx
-        self.word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
-        self.pad_idx = self.word_embeddings.padding_idx
+        self.word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=pad_idx)
+        self.pad_idx = pad_idx
         # Scale down embedding initialization
         self.word_embeddings.weight.data.normal_(mean=0.0, std=0.02)
         # self.inverse_word_embeddings = nn.Embedding(self.vocab_size, self.dim, padding_idx=0)
@@ -206,10 +206,11 @@ class Transformer(nn.Module):
             incomplete_inp = inp[incomplete]
             incomplete_inp_lengths = inp_lengths[incomplete]
             incomplete_inp_indices = torch.arange(incomplete_inp_lengths.shape[0], device=device)
-            last_chance_incomplete = incomplete_inp_lengths == self.max_length - 1
 
             # [B, N, V]
             logits = self(incomplete_inp)
+            # zero out probability of predicting pad idx
+            logits[:, :, self.pad_idx] = float("-inf")
             # [B, V]
             logits = logits[incomplete_inp_indices, incomplete_inp_lengths - 1, :]
             if require_probs:
@@ -219,8 +220,6 @@ class Transformer(nn.Module):
                 preds = torch.argmax(logits, dim=-1, keepdim=False)
             elif sampling == "nucleus":
                 preds = self.nucleus(logits)
-            # force eos into the ones which have no more room left
-            preds[last_chance_incomplete] = self.eos_idx
             if require_probs:
                 pred_probs = logit_probs[incomplete_inp_indices, preds]
 
@@ -228,9 +227,9 @@ class Transformer(nn.Module):
             if require_probs:
                 inp_probs[incomplete, incomplete_inp_lengths] = pred_probs
 
-            # advance the length for the ones which are incomplete and did not predict EOS
-            still_incomplete = preds != self.eos_idx
-            incomplete_inp_lengths[still_incomplete] += 1
+            # advance the length for all incomplete sequences by one
+            incomplete_inp_lengths += 1
+            still_incomplete = torch.logical_and(preds != self.eos_idx, incomplete_inp_lengths < self.max_length)
 
             # pour over everything back into the original tensors
             inp_lengths[incomplete] = incomplete_inp_lengths
@@ -239,7 +238,7 @@ class Transformer(nn.Module):
         out = {"preds": inp, "pred_probs": inp_probs}
         return out
 
-    def nucleus(self, logits, top_p=0.9):
+    def nucleus(self, logits, top_p=1.0):
         probs = softmax(logits, dim=-1)
         sorted_probs, sorted_indices = torch.sort(probs, descending=True)
         cumsum_probs = torch.cumsum(sorted_probs, dim=-1)

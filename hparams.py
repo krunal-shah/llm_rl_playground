@@ -1,5 +1,6 @@
 # Training
 TRAINING_OBJECTIVE = "rl"
+RL_NUM_SAMPLES = 16
 
 # Model hparams
 MODEL_DIM = 512
@@ -8,7 +9,7 @@ MODEL_NLAYERS = 4
 
 # Training hparams
 TRAIN_BATCH_SIZE = 128
-LR = 5e-4
+LR = 1e-4
 LINEAR_START_FACTOR = 0.05
 LINEAR_TOTAL_ITERS = 30
 COSINE_TMAX = 5000
@@ -23,12 +24,13 @@ VAL_SPLIT = 0.03
 TEST_SPLIT = 0.03
 
 EXP_NAME = (
-    f"model_d{MODEL_DIM}_nh{MODEL_NHEADS}_nl{MODEL_NLAYERS}_add_data_num{NUM_DATA}_max{MAX_INT}_"
+    f"training_{TRAINING_OBJECTIVE}_model_d{MODEL_DIM}_nh{MODEL_NHEADS}_nl{MODEL_NLAYERS}_add_data_num{NUM_DATA}_max{MAX_INT}_"
     f"train_bs{TRAIN_BATCH_SIZE}_lr{LR}_lin_sf{LINEAR_START_FACTOR}_itr{LINEAR_TOTAL_ITERS}_"
     f"cos_tm{COSINE_TMAX}_min{COSINE_ETA_MIN}_mil{SCHEDULER_MILESTONES}"
 )
 
 VAL_BATCH_SIZE = 64
-VAL_EVERY_NSTEPS = 50
+VAL_EVERY_NSTEPS = 25
 SAVE_EVERY_NSTEPS = 10000
-MODEL_LOAD_PATH = None
+# MODEL_LOAD_PATH = None
+MODEL_LOAD_PATH = "checkpoints/model_d512_nh8_nl4_add_data_num50000_max1000_train_bs128_lr0.0005_lin_sf0.05_itr30_cos_tm5000_min5e-05_mil[30]"

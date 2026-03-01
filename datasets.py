@@ -33,12 +33,17 @@ class AdditionDataset(Dataset):
         if isinstance(preds, torch.Tensor):
             preds = preds.tolist()
         pred_string = ""
-        for i in preds:
-            if i == self.pad_idx:
+        counter = 0
+        preds_size = len(preds)
+        while counter < preds_size and preds[counter] == self.pad_idx:
+            counter += 1
+
+        while counter < preds_size:
+            if preds[counter] == self.pad_idx:
                 break
-            elif i == self.sos_idx or i == self.eos_idx:
-                continue
-            pred_string += self.reverse_vocab[i]
+            elif preds[counter] != self.sos_idx and preds[counter] != self.eos_idx:
+                pred_string += self.reverse_vocab[preds[counter]]
+            counter += 1
         return pred_string
 
     def __getitem__(self, idx):

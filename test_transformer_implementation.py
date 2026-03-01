@@ -34,9 +34,9 @@ TEST_CASE_1 = {
             dtype=torch.float32,
         ),
     ],
-    "preds": torch.tensor([[1, 1, 1, 1, 2], [1, 1, 1, 1, 2], [1, 1, 2, 0, 0]]),
+    "preds": torch.tensor([[1, 1, 1, 1, 2], [1, 1, 1, 1, 1], [1, 1, 2, 0, 0]]),
     "pred_probs": torch.tensor(
-        [[1, 1, PROB_200, PROB_100, PROB_200], [1, 1, 1, PROB_100, PROB_020], [1, PROB_100, PROB_200, 0, 0]]
+        [[1, 1, PROB_200, PROB_100, PROB_200], [1, 1, 1, PROB_100, PROB_200], [1, PROB_100, PROB_200, 0, 0]]
     ),
 }
 
@@ -77,12 +77,12 @@ class TestTransformer:
 
     def test_generate_test_case_1(self):
         with patch.object(self.transformer, "forward", side_effect=TEST_CASE_1["forwards"]):
-            outputs = self.transformer.generate(INPUT_DATA, require_probs=True)
+            outputs = self.transformer.generate(INPUT_DATA, require_probs=True, sampling="greedy")
             assert torch.all(outputs["preds"] == TEST_CASE_1["preds"])
             assert torch.allclose(outputs["pred_probs"], TEST_CASE_1["pred_probs"])
 
     def test_generate_test_case_2(self):
         with patch.object(self.transformer, "forward", side_effect=TEST_CASE_2["forwards"]):
-            outputs = self.transformer.generate(INPUT_DATA, require_probs=True)
+            outputs = self.transformer.generate(INPUT_DATA, require_probs=True, sampling="greedy")
             assert torch.all(outputs["preds"] == TEST_CASE_2["preds"])
             assert torch.allclose(outputs["pred_probs"], TEST_CASE_2["pred_probs"])
